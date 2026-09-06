@@ -1246,7 +1246,7 @@
         const frameW = Math.max(1, Math.floor(vW * scale));
         const frameH = Math.max(1, Math.floor(vH * scale));
         const cropW = Math.max(1, Math.floor(frameW * 0.92));
-        const cropH = Math.max(1, Math.floor(frameH * 0.48));
+        const cropH = Math.max(1, Math.floor(frameH * 0.70));
         const cropX = Math.floor((frameW - cropW) / 2);
         const cropY = Math.floor((frameH - cropH) / 2);
 
@@ -1318,6 +1318,7 @@
           const val = d[i] > threshold ? 255 : 0;
           d[i] = d[i+1] = d[i+2] = val;
         }
+        cropContext.putImageData(imgData, 0, 0);
         const { data: { text } } = await tesseractWorker.recognize(c);
         const plate = resolveOcrPlate(text);
 
@@ -1504,7 +1505,12 @@
 
     function resolveOcrPlate(rawText) {
       const cleaned = (rawText || '').toString().toUpperCase().replace(/[^А-ЯA-Z0-9]/g, '');
-      const candidates = cleaned.match(/[А-ЯA-Z0-9]{8,9}/g) || [];
+      const candidates = [];
+      for (let length = 9; length >= 8; length--) {
+        for (let start = 0; start <= cleaned.length - length; start++) {
+          candidates.push(cleaned.slice(start, start + length));
+        }
+      }
       const letterOptions = {
         '0': ['О'], 'O': ['О'], 'О': ['О'], 'A': ['А', 'О'], 'А': ['А', 'О'],
         'B': ['В'], 'В': ['В'], 'E': ['Е'], 'Е': ['Е'], 'K': ['К'], 'К': ['К'],
