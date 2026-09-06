@@ -1187,7 +1187,9 @@
       try {
         tesseractWorker = await Tesseract.createWorker('rus+eng');
         await tesseractWorker.setParameters({
-          tessedit_char_whitelist: '0123456789АВЕКМНОРСТУХABEKMHOPCTYX'
+          tessedit_char_whitelist: '0123456789АВЕКМНОРСТУХABEKMHOPCTYX',
+          tessedit_pageseg_mode: '7',
+          user_defined_dpi: '300'
         });
         startContinuousScanning();
       } catch (e) {
@@ -1253,12 +1255,38 @@
         const ctx = c.getContext('2d', { willReadFrequently: true });
         ctx.drawImage(v, 0, 0, vW, vH, 0, 0, frameW, frameH);
         const crop = ctx.getImageData(cropX, cropY, cropW, cropH);
-        c.width = cropW;
-        c.height = cropH;
-        const cropContext = c.getContext('2d', { willReadFrequently: true });
-        cropContext.putImageData(crop, 0, 0);
+        const originalCanvas = document.createElement('canvas');
+        originalCanvas.width = cropW;
+        originalCanvas.height = cropH;
+        originalCanvas.getContext('2d').putImageData(crop, 0, 0);
 
-        const imgData = cropContext.getImageData(0, 0, cropW, cropH);
+        const ocrScale = 2;
+        c.width = cropW * ocrScale;
+        c.height = cropH * ocrScale;
+        const cropContext = c.getContext('2d', { willReadFrequently: true });
+        cropContext.imageSmoothingEnabled = false;
+        cropContext.drawImage(originalCanvas, 0, 0, c.width, c.height);
+
+        const originalCrop = cropContext.getImageData(0, 0, c.width, c.height);
+        const originalText = (await tesseractWorker.recognize(c)).data.text;
+        const originalPlate = resolveOcrPlate(originalText);
+        if (originalPlate) {
+          const isNewPlate = detectedPlate !== originalPlate;
+          detectedPlate = originalPlate;
+          if (!isAutomatic) {
+            isFrameFrozen = true;
+            v.pause();
+            cameraViewport.classList.add('is-frozen');
+            setScanButtonState(true);
+          }
+          if (isNewPlate) {
+            targetHint.innerText = 'Номер успешно распознан';
+            evaluatePlateMatch(originalPlate);
+          }
+          return;
+        }
+
+        const imgData = originalCrop;
         const d = imgData.data;
         let histogram = new Array(256).fill(0);
         for (let i = 0; i < d.length; i += 4) {
@@ -1290,21 +1318,22 @@
           const val = d[i] > threshold ? 255 : 0;
           d[i] = d[i+1] = d[i+2] = val;
         }
-        ctx.putImageData(imgData, 0, 0);
-
         const { data: { text } } = await tesseractWorker.recognize(c);
         const plate = resolveOcrPlate(text);
 
         if (plate) {
+          const isNewPlate = detectedPlate !== plate;
           detectedPlate = plate;
-          
-          isFrameFrozen = true;
-          v.pause();
-          cameraViewport.classList.add('is-frozen');
-          setScanButtonState(true);
-          targetHint.innerText = 'Номер успешно распознан';
-
-          evaluatePlateMatch(plate);
+          if (!isAutomatic) {
+            isFrameFrozen = true;
+            v.pause();
+            cameraViewport.classList.add('is-frozen');
+            setScanButtonState(true);
+          }
+          if (isNewPlate) {
+            targetHint.innerText = 'Номер успешно распознан';
+            evaluatePlateMatch(plate);
+          }
         } else {
           if (isAutomatic) setScanButtonState(false);
           else {
@@ -1475,32 +1504,28 @@
 
     function resolveOcrPlate(rawText) {
       const cleaned = (rawText || '').toString().toUpperCase().replace(/[^А-ЯA-Z0-9]/g, '');
-      const candidates = cleaned.match(/[АВЕКМНОРСТУХABEKMHOPCTYX0-9]{8,9}/g) || [];
+      const candidates = cleaned.match(/[А-ЯA-Z0-9]{8,9}/g) || [];
       const letterOptions = {
         '0': ['О'], 'O': ['О'], 'О': ['О'], 'A': ['А', 'О'], 'А': ['А', 'О'],
         'B': ['В'], 'В': ['В'], 'E': ['Е'], 'Е': ['Е'], 'K': ['К'], 'К': ['К'],
         'M': ['М'], 'М': ['М'], 'H': ['Н'], 'Н': ['Н'], 'P': ['Р'], 'Р': ['Р'],
         'C': ['С'], 'С': ['С'], 'T': ['Т'], 'Т': ['Т'], 'Y': ['У'], 'У': ['У'],
-        'X': ['Х'], 'Х': ['Х']
+        'X': ['Х'], 'Х': ['Х'], 'Б': ['В'], 'З': ['З'], 'И': ['И']
       };
-
-      const formats = [
-        { regex: PLATE_REGEX, letterPositions: [0, 4, 5], digitPositions: [1, 2, 3, 6, 7, 8] }
-      ];
 
       for (const candidate of candidates) {
         const plateLength = candidate.length;
-        const plateFormat = formats.find(format => format.regex.test(candidate));
-        if (!plateFormat) continue;
-        const { letterPositions, digitPositions } = plateFormat;
+        if (plateLength !== 8 && plateLength !== 9) continue;
+        const letterPositions = [0, 4, 5];
+        const digitPositions = [1, 2, 3, 6, 7, 8];
         const variants = [''];
 
         for (let index = 0; index < plateLength; index++) {
-          const options = letterPositions.includes(index)
-            ? (letterOptions[candidate[index]] || [candidate[index]])
-            : digitPositions.includes(index)
-              ? (/[ОO]/.test(candidate[index]) ? ['0'] : [candidate[index]])
-              : [candidate[index]];
+            const options = letterPositions.includes(index)
+              ? (letterOptions[candidate[index]] || [candidate[index]])
+              : digitPositions.includes(index)
+                ? ({ 'О': ['0'], 'O': ['0'], 'З': ['3'], 'Б': ['8'], 'И': ['1'] }[candidate[index]] || [candidate[index]])
+                : [candidate[index]];
           const variantCount = variants.length;
           for (let variantIndex = 0; variantIndex < variantCount; variantIndex++) {
             const prefix = variants[variantIndex];
