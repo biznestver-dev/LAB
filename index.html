@@ -1233,95 +1233,80 @@
     // Ручной сканер с оптимизированным UI-индикатором и сверкой
     async function captureAndScanManual(isAutomatic = false) {
       if (isFrameFrozen || isOcrBusy || !v.videoWidth || !tesseractWorker) return;
-      
+
       setScanButtonState(false, true);
 
       try {
         isOcrBusy = true;
         if (!isAutomatic) freezeCurrentFrame();
 
-        const vW = v.videoWidth;
-        const vH = v.videoHeight;
-        const scale = Math.min(1, 1280 / vW);
-        const frameW = Math.max(1, Math.floor(vW * scale));
-        const frameH = Math.max(1, Math.floor(vH * scale));
-        const cropW = Math.max(1, Math.floor(frameW * 0.92));
-        const cropH = Math.max(1, Math.floor(frameH * 0.70));
-        const cropX = Math.floor((frameW - cropW) / 2);
-        const cropY = Math.floor((frameH - cropH) / 2);
+        const viewW = cameraViewport.clientWidth;
+        const viewH = cameraViewport.clientHeight;
 
-        c.width = frameW;
-        c.height = frameH;
+        // 1. Рисуем видео в масштабе вьюпорта (эмуляция object-fit: cover)
+        c.width = viewW;
+        c.height = viewH;
         const ctx = c.getContext('2d', { willReadFrequently: true });
-        ctx.drawImage(v, 0, 0, vW, vH, 0, 0, frameW, frameH);
-        const crop = ctx.getImageData(cropX, cropY, cropW, cropH);
-        const originalCanvas = document.createElement('canvas');
-        originalCanvas.width = cropW;
-        originalCanvas.height = cropH;
-        originalCanvas.getContext('2d').putImageData(crop, 0, 0);
 
-        const ocrScale = 2;
-        c.width = cropW * ocrScale;
-        c.height = cropH * ocrScale;
-        const cropContext = c.getContext('2d', { willReadFrequently: true });
-        cropContext.imageSmoothingEnabled = false;
-        cropContext.drawImage(originalCanvas, 0, 0, c.width, c.height);
+        const videoRatio = v.videoWidth / v.videoHeight;
+        const viewRatio = viewW / viewH;
+        let drawW = viewW;
+        let drawH = viewH;
+        let drawX = 0;
+        let drawY = 0;
 
-        const originalCrop = cropContext.getImageData(0, 0, c.width, c.height);
+        if (videoRatio > viewRatio) {
+          drawW = viewH * videoRatio;
+          drawX = (viewW - drawW) / 2;
+        } else {
+          drawH = viewW / videoRatio;
+          drawY = (viewH - drawH) / 2;
+        }
+        ctx.drawImage(v, drawX, drawY, drawW, drawH);
+
+        // 2. Вырезаем точно то, что находится в .plate-target
+        const targetW = Math.floor(viewW * 0.94); // ширина 94%
+        let targetH = Math.floor(viewH * 0.36);   // высота 36%
+        if (targetH > 280) targetH = 280;         // max-height 280px
+
+        const cropX = Math.floor((viewW - targetW) / 2);
+        const cropY = Math.floor((viewH - targetH) / 2);
+        const cropImageData = ctx.getImageData(cropX, cropY, targetW, targetH);
+
+        // 3. Увеличиваем кроп x2 для Tesseract
+        const ocrCanvas = document.createElement('canvas');
+        ocrCanvas.width = targetW;
+        ocrCanvas.height = targetH;
+        ocrCanvas.getContext('2d').putImageData(cropImageData, 0, 0);
+
+        c.width = targetW * 2;
+        c.height = targetH * 2;
+        const cropCtx = c.getContext('2d', { willReadFrequently: true });
+        cropCtx.imageSmoothingEnabled = false;
+        cropCtx.drawImage(ocrCanvas, 0, 0, c.width, c.height);
+
+        // ПОПЫТКА 1: Чистое изображение
         const originalText = (await tesseractWorker.recognize(c)).data.text;
-        const originalPlate = resolveOcrPlate(originalText);
-        if (originalPlate) {
-          const isNewPlate = detectedPlate !== originalPlate;
-          detectedPlate = originalPlate;
-          if (!isAutomatic) {
-            isFrameFrozen = true;
-            v.pause();
-            cameraViewport.classList.add('is-frozen');
-            setScanButtonState(true);
+        let plate = resolveOcrPlate(originalText);
+
+        // ПОПЫТКА 2: Если не нашло, применяем легкий контраст и ч/б фильтр
+        if (!plate) {
+          const imgData = cropCtx.getImageData(0, 0, c.width, c.height);
+          const d = imgData.data;
+          for (let i = 0; i < d.length; i += 4) {
+            let gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+            let contrast = (gray - 128) * 1.5 + 128; // Мягкий контраст
+            let val = Math.min(255, Math.max(0, contrast));
+            d[i] = val;
+            d[i + 1] = val;
+            d[i + 2] = val;
           }
-          if (isNewPlate) {
-            targetHint.innerText = 'Номер успешно распознан';
-            evaluatePlateMatch(originalPlate);
-          }
-          return;
+          cropCtx.putImageData(imgData, 0, 0);
+          const enhancedText = (await tesseractWorker.recognize(c)).data.text;
+          plate = resolveOcrPlate(enhancedText);
         }
 
-        const imgData = originalCrop;
-        const d = imgData.data;
-        let histogram = new Array(256).fill(0);
-        for (let i = 0; i < d.length; i += 4) {
-          const gray = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
-          d[i] = gray; d[i+1] = gray; d[i+2] = gray;
-          histogram[gray]++;
-        }
-
-        let total = d.length / 4, sum = 0;
-        for (let t = 0; t < 256; t++) sum += t * histogram[t];
-        let sumB = 0, wB = 0, wF = 0, varMax = 0, threshold = 120;
-
-        for (let t = 0; t < 256; t++) {
-          wB += histogram[t];
-          if (wB === 0) continue;
-          wF = total - wB;
-          if (wF === 0) break;
-          sumB += t * histogram[t];
-          let mB = sumB / wB;
-          let mF = (sum - sumB) / wF;
-          let varBetween = wB * wF * (mB - mF) * (mB - mF);
-          if (varBetween > varMax) {
-            varMax = varBetween;
-            threshold = t;
-          }
-        }
-
-        for (let i = 0; i < d.length; i += 4) {
-          const val = d[i] > threshold ? 255 : 0;
-          d[i] = d[i+1] = d[i+2] = val;
-        }
-        cropContext.putImageData(imgData, 0, 0);
-        const { data: { text } } = await tesseractWorker.recognize(c);
-        const plate = resolveOcrPlate(text);
-
+        // ОБРАБОТКА РЕЗУЛЬТАТА
         if (plate) {
           const isNewPlate = detectedPlate !== plate;
           detectedPlate = plate;
@@ -1336,12 +1321,11 @@
             evaluatePlateMatch(plate);
           }
         } else {
-          if (isAutomatic) setScanButtonState(false);
-          else {
+          if (isAutomatic) {
+            setScanButtonState(false);
+          } else {
             setScanButtonState(true);
             targetHint.innerText = 'Кадр остановлен: номер не найден';
-          }
-          if (!isAutomatic) {
             alert("Номер не удалось четко распознать. Выровняйте номер по центру рамки и повторите.");
           }
         }
@@ -1919,7 +1903,7 @@
       container.innerHTML = shiftLogs.map(log => `
         <div class="log-row">
           <div class="log-main">
-            ${log.photo ? `<img class="log-thumb" src="${escape(log.photo)}" alt="Фото" onclick="openPhotoModal('${escape(log.photo)}', '${escape(log.plate)} · ${escape(log.action)}')">` : ''}
+            ${log.photo ? `<img class="log-thumb" src="${escape(log.photo)}" alt="Фото" onclick="openPhotoModal('${escape(log.photo)}', '${escape(log.plate)} ·${escape(log.action)}')">` : ''}
             <div>
               <div class="log-plate">${escape(log.plate)} · ${escape(log.action)}</div>
               <div class="log-meta">${escape(new Date(log.createdAt).toLocaleString('ru-RU'))} · ${escape(log.operator)}</div>
