@@ -27,7 +27,11 @@
     }
     .sync-info { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #94a3b8; cursor: pointer; }
     .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; box-shadow: 0 0 10px #22c55e; }
-    .header-actions { display: flex; gap: 8px; }
+    .header-actions {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+    }
     .offline-badge { color: #fbbf24; }
     
     .btn-icon {
@@ -48,6 +52,7 @@
     .btn-manual { background: rgba(16, 185, 129, 0.15); color: #34d399; border-color: rgba(16, 185, 129, 0.3); }
     .btn-list { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border-color: rgba(59, 130, 246, 0.3); }
     .btn-icon.listening { background: rgba(239, 68, 68, 0.18); color: #fca5a5; border-color: rgba(239, 68, 68, 0.45); }
+    #voiceSearchBtn { grid-column: 1 / -1; justify-content: center; }
     .btn-voice-entry { align-self: center; justify-content: center; width: 100%; }
 
     /* Видоискатель */
@@ -717,7 +722,7 @@
       }
       .header-actions {
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 6px;
       }
       .btn-icon {
@@ -779,8 +784,7 @@
     }
 
     @media (max-width: 360px) {
-      .header-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .btn-icon { font-size: 13px; }
+      .header-actions .btn-icon { font-size: 10px; }
       .plate-title { font-size: 20px; }
       .car-sub-text { font-size: 12px; }
       .car-actions-col { gap: 4px; }
@@ -795,8 +799,8 @@
       <span id="syncText">База: связь...</span>
     </div>
     <div class="header-actions">
-      <button class="btn-icon" id="torchBtn" onclick="toggleTorch()">🔦 Свет</button>
       <button class="btn-icon" id="voiceSearchBtn" onclick="toggleVoiceSearch()" title="Найти номер голосом">🎙 Голос</button>
+      <button class="btn-icon" id="torchBtn" onclick="toggleTorch()">🔦 Свет</button>
       <button class="btn-icon btn-list" onclick="openListModal()">📋 Список</button>
       <button class="btn-icon" onclick="openLogModal()">🧾 Журнал</button>
       <button class="btn-icon btn-manual" onclick="openModal()">➕ Авто</button>
