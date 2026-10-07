@@ -1243,11 +1243,8 @@
         const viewW = cameraViewport.clientWidth;
         const viewH = cameraViewport.clientHeight;
 
-        // 1. Рисуем видео в масштабе вьюпорта (эмуляция object-fit: cover)
-        c.width = viewW;
-        c.height = viewH;
-        const ctx = c.getContext('2d', { willReadFrequently: true });
-
+        // Рассчитываем область рамки напрямую в координатах исходного видео,
+        // чтобы не терять детали при предварительном уменьшении до размера экрана.
         const videoRatio = v.videoWidth / v.videoHeight;
         const viewRatio = viewW / viewH;
         let drawW = viewW;
@@ -1262,41 +1259,38 @@
           drawH = viewW / videoRatio;
           drawY = (viewH - drawH) / 2;
         }
-        ctx.drawImage(v, drawX, drawY, drawW, drawH);
-
-        // 2. Вырезаем точно то, что находится в .plate-target
+        // Вырезаем точно то, что находится в .plate-target.
         const targetW = Math.floor(viewW * 0.94); // ширина 94%
         let targetH = Math.floor(viewH * 0.36);   // высота 36%
         if (targetH > 280) targetH = 280;         // max-height 280px
 
         const cropX = Math.floor((viewW - targetW) / 2);
         const cropY = Math.floor((viewH - targetH) / 2);
-        const cropImageData = ctx.getImageData(cropX, cropY, targetW, targetH);
+        const sourceX = Math.max(0, (cropX - drawX) * v.videoWidth / drawW);
+        const sourceY = Math.max(0, (cropY - drawY) * v.videoHeight / drawH);
+        const sourceW = Math.min(targetW * v.videoWidth / drawW, v.videoWidth - sourceX);
+        const sourceH = Math.min(targetH * v.videoHeight / drawH, v.videoHeight - sourceY);
 
-        // 3. Увеличиваем кроп x2 для Tesseract
-        const ocrCanvas = document.createElement('canvas');
-        ocrCanvas.width = targetW;
-        ocrCanvas.height = targetH;
-        ocrCanvas.getContext('2d').putImageData(cropImageData, 0, 0);
-
-        c.width = targetW * 2;
-        c.height = targetH * 2;
+        // Увеличиваем исходный фрагмент с интерполяцией, а не размываем его уменьшением.
+        c.width = Math.ceil(sourceW * 2);
+        c.height = Math.ceil(sourceH * 2);
         const cropCtx = c.getContext('2d', { willReadFrequently: true });
-        cropCtx.imageSmoothingEnabled = false;
-        cropCtx.drawImage(ocrCanvas, 0, 0, c.width, c.height);
+        cropCtx.imageSmoothingEnabled = true;
+        cropCtx.imageSmoothingQuality = 'high';
+        cropCtx.drawImage(v, sourceX, sourceY, sourceW, sourceH, 0, 0, c.width, c.height);
 
         // ПОПЫТКА 1: Чистое изображение
         const originalText = (await tesseractWorker.recognize(c)).data.text;
         let plate = resolveOcrPlate(originalText);
 
-        // ПОПЫТКА 2: Если не нашло, применяем легкий контраст и ч/б фильтр
+        // ПОПЫТКА 2: Если не нашло, повышаем контраст и убираем цветовой шум.
         if (!plate) {
           const imgData = cropCtx.getImageData(0, 0, c.width, c.height);
           const d = imgData.data;
           for (let i = 0; i < d.length; i += 4) {
-            let gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-            let contrast = (gray - 128) * 1.5 + 128; // Мягкий контраст
-            let val = Math.min(255, Math.max(0, contrast));
+            const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+            const contrast = (gray - 128) * 1.8 + 128;
+            const val = Math.min(255, Math.max(0, contrast));
             d[i] = val;
             d[i + 1] = val;
             d[i + 2] = val;
