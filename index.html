@@ -110,6 +110,13 @@
       transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
     }
     .freeze-controls button:active { transform: scale(0.97); }
+    .freeze-controls #manualFrameScanBtn {
+      background: rgba(15, 23, 42, 0.92);
+      color: #bae6fd;
+      border: 1px solid rgba(56, 189, 248, 0.45);
+      padding: 11px 18px;
+      font-size: 13px;
+    }
 
     /* Стили анимаций и состояний кнопки */
     #snapScanBtn {
@@ -742,6 +749,7 @@
       .target-hint { bottom: 10px; font-size: 10px; }
       .freeze-controls { left: 10px; right: 10px; bottom: 12px; }
       .freeze-controls button { min-height: 48px; padding: 12px 14px; font-size: 14px; }
+      .freeze-controls #manualFrameScanBtn { min-height: 42px; padding: 9px 12px; font-size: 12px; }
       .vip-overlay-badge { top: 10px; left: 10px; right: 10px; }
       .bottom-sheet {
         padding: 10px 10px calc(env(safe-area-inset-bottom, 10px) + 6px);
@@ -825,6 +833,7 @@
     </div>
     <div class="freeze-controls">
       <button id="snapScanBtn" type="button" onclick="toggleScanMode()" disabled>Подготовка поиска...</button>
+      <button id="manualFrameScanBtn" type="button" onclick="scanCurrentFrame()" disabled>📸 Стоп-кадр и распознать</button>
     </div>
   </div>
 
@@ -1033,6 +1042,7 @@
     const frozenFrame = document.getElementById('frozenFrame');
     const cameraViewport = document.querySelector('.camera-viewport');
     const snapScanBtn = document.getElementById('snapScanBtn');
+    const manualFrameScanBtn = document.getElementById('manualFrameScanBtn');
     const actionBtn = document.getElementById('actionBtn');
     const target = document.getElementById('target');
     const targetHint = document.getElementById('targetHint');
@@ -1227,11 +1237,12 @@
 
     function setScanButtonState(isAnalyzing = false) {
       snapScanBtn.hidden = false;
-      snapScanBtn.disabled = isAnalyzing;
+      snapScanBtn.disabled = isAnalyzing || !tesseractWorker;
       snapScanBtn.className = isAnalyzing ? 'analyzing' : '';
       snapScanBtn.innerHTML = isAnalyzing
         ? '⚡ Анализ кадра...'
         : isCameraScanning ? '⏹ Остановить поиск' : '🔎 Начать поиск номера';
+      manualFrameScanBtn.disabled = isAnalyzing || isOcrBusy || !tesseractWorker || !v.videoWidth;
     }
 
     function freezeCurrentFrame() {
@@ -1244,7 +1255,7 @@
       isFrameFrozen = true;
       v.pause();
       cameraViewport.classList.add('is-frozen');
-      setScanButtonState();
+      setScanButtonState(isOcrBusy);
     }
 
     function toggleScanMode() {
@@ -1269,16 +1280,36 @@
       setScanButtonState();
     }
 
+    function scanCurrentFrame() {
+      if (isOcrBusy) {
+        targetHint.innerText = 'Дождитесь завершения текущего распознавания';
+        return;
+      }
+      if (!v.videoWidth || !tesseractWorker) {
+        targetHint.innerText = 'Камера или распознавание еще не готовы';
+        return;
+      }
+
+      if (isCameraScanning) {
+        isCameraScanning = false;
+        cameraScanSession++;
+        ocrCandidatePlate = null;
+        ocrCandidateCount = 0;
+      }
+      captureAndScanManual(false);
+    }
+
     // Ручной сканер с оптимизированным UI-индикатором и сверкой
     async function captureAndScanManual(isAutomatic = false) {
-      if (isFrameFrozen || isOcrBusy || !v.videoWidth || !tesseractWorker) return;
+      if ((isAutomatic && isFrameFrozen) || isOcrBusy || !v.videoWidth || !tesseractWorker) return;
 
       const scanSession = cameraScanSession;
       setScanButtonState(!isAutomatic);
 
       try {
         isOcrBusy = true;
-        if (!isAutomatic) freezeCurrentFrame();
+        setScanButtonState(!isAutomatic);
+        if (!isAutomatic && !isFrameFrozen) freezeCurrentFrame();
 
         const viewW = cameraViewport.clientWidth;
         const viewH = cameraViewport.clientHeight;
@@ -1405,6 +1436,7 @@
         }
       } finally {
         isOcrBusy = false;
+        setScanButtonState();
       }
     }
 
