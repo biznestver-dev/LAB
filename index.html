@@ -47,6 +47,7 @@
     .btn-icon:active { transform: scale(0.96); background: rgba(255, 255, 255, 0.12); }
     .btn-manual { background: rgba(16, 185, 129, 0.15); color: #34d399; border-color: rgba(16, 185, 129, 0.3); }
     .btn-list { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border-color: rgba(59, 130, 246, 0.3); }
+    .btn-icon.listening { background: rgba(239, 68, 68, 0.18); color: #fca5a5; border-color: rgba(239, 68, 68, 0.45); }
 
     /* Видоискатель */
     .camera-viewport {
@@ -715,7 +716,7 @@
       }
       .header-actions {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 6px;
       }
       .btn-icon {
@@ -794,6 +795,7 @@
     </div>
     <div class="header-actions">
       <button class="btn-icon" id="torchBtn" onclick="toggleTorch()">🔦 Свет</button>
+      <button class="btn-icon" id="voiceSearchBtn" onclick="toggleVoiceSearch()" title="Найти номер голосом">🎙 Голос</button>
       <button class="btn-icon btn-list" onclick="openListModal()">📋 Список</button>
       <button class="btn-icon" onclick="openLogModal()">🧾 Журнал</button>
       <button class="btn-icon btn-manual" onclick="openModal()">➕ Авто</button>
@@ -974,6 +976,7 @@
     let detectedPlate = null;
     let ocrCandidatePlate = null;
     let ocrCandidateCount = 0;
+    let speechRecognition = null;
     let selectedDetailPlate = null;
     let tesseractWorker = null;
     let activeFilter = 'all';
@@ -1031,6 +1034,7 @@
     const syncText = document.getElementById('syncText');
     const dot = document.getElementById('dot');
     const vipOverlayBadge = document.getElementById('vipOverlayBadge');
+    const voiceSearchBtn = document.getElementById('voiceSearchBtn');
 
     // Синтезатор звука (Web Audio API) с расширенными паттернами
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1561,6 +1565,148 @@
       }
 
       return null;
+    }
+
+    function resolveVoicePlate(transcript) {
+      const directMatch = resolveOcrPlate(transcript);
+      if (directMatch && CARS_DB[directMatch]) return directMatch;
+
+      const tokens = (transcript || '').toString().toUpperCase().replace(/Ё/g, 'Е').match(/[А-ЯA-Z]+|\d+/g) || [];
+      const spokenLetters = {
+        'А': 'А', 'АЭ': 'А', 'ЭЙ': 'А',
+        'ВЭ': 'В', 'ВЕ': 'В',
+        'Е': 'Е', 'ЙЕ': 'Е',
+        'КА': 'К',
+        'ЭМ': 'М',
+        'ЭН': 'Н',
+        'О': 'О',
+        'ЭР': 'Р',
+        'ЭС': 'С',
+        'ТЭ': 'Т',
+        'У': 'У',
+        'ИКС': 'Х'
+      };
+      const spokenNumbers = {
+        'НОЛЬ': 0, 'НУЛЬ': 0,
+        'ОДИН': 1, 'ОДНА': 1, 'ОДНО': 1,
+        'ДВА': 2, 'ДВЕ': 2, 'ТРИ': 3, 'ЧЕТЫРЕ': 4, 'ПЯТЬ': 5,
+        'ШЕСТЬ': 6, 'СЕМЬ': 7, 'ВОСЕМЬ': 8, 'ДЕВЯТЬ': 9,
+        'ДЕСЯТЬ': 10, 'ОДИННАДЦАТЬ': 11, 'ДВЕНАДЦАТЬ': 12,
+        'ТРИНАДЦАТЬ': 13, 'ЧЕТЫРНАДЦАТЬ': 14, 'ПЯТНАДЦАТЬ': 15,
+        'ШЕСТНАДЦАТЬ': 16, 'СЕМНАДЦАТЬ': 17, 'ВОСЕМНАДЦАТЬ': 18,
+        'ДЕВЯТНАДЦАТЬ': 19, 'ДВАДЦАТЬ': 20, 'ТРИДЦАТЬ': 30,
+        'СОРОК': 40, 'ПЯТЬДЕСЯТ': 50, 'ШЕСТЬДЕСЯТ': 60,
+        'СЕМЬДЕСЯТ': 70, 'ВОСЕМЬДЕСЯТ': 80, 'ДЕВЯНОСТО': 90,
+        'СТО': 100, 'ДВЕСТИ': 200, 'ТРИСТА': 300, 'ЧЕТЫРЕСТА': 400,
+        'ПЯТЬСОТ': 500, 'ШЕСТЬСОТ': 600, 'СЕМЬСОТ': 700,
+        'ВОСЕМЬСОТ': 800, 'ДЕВЯТЬСОТ': 900
+      };
+      const plateLetters = /^[АВЕКМНОРСТУХABEKMHOPCTYX]{1,3}$/;
+      let candidate = '';
+
+      for (let index = 0; index < tokens.length;) {
+        const token = tokens[index];
+        if (spokenLetters[token]) {
+          candidate += spokenLetters[token];
+          index++;
+          continue;
+        }
+        if (spokenNumbers[token] !== undefined) {
+          const numberWords = [];
+          while (index < tokens.length && spokenNumbers[tokens[index]] !== undefined) {
+            numberWords.push(tokens[index]);
+            index++;
+          }
+          const values = numberWords.map(word => spokenNumbers[word]);
+          if (values.some(value => value >= 10)) {
+            candidate += String(values.reduce((sum, value) => sum + value, 0));
+          } else {
+            candidate += values.join('');
+          }
+          continue;
+        }
+        if (/^\d+$/.test(token)) {
+          candidate += token;
+        } else if (plateLetters.test(token)) {
+          candidate += token;
+        }
+        index++;
+      }
+
+      return resolveOcrPlate(candidate);
+    }
+
+    function toggleVoiceSearch() {
+      if (speechRecognition) {
+        speechRecognition.stop();
+        return;
+      }
+
+      const SpeechRecognitionApi = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognitionApi) {
+        targetHint.innerText = 'Голосовой поиск не поддерживается этим браузером';
+        return;
+      }
+      if (!Object.keys(CARS_DB).length) {
+        targetHint.innerText = 'База автомобилей еще не загружена';
+        return;
+      }
+
+      const recognition = new SpeechRecognitionApi();
+      speechRecognition = recognition;
+      recognition.lang = 'ru-RU';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.maxAlternatives = 5;
+
+      recognition.onstart = () => {
+        voiceSearchBtn.innerText = '⏹ Слушаю';
+        voiceSearchBtn.classList.add('listening');
+        targetHint.innerText = 'Назовите номер автомобиля';
+      };
+      recognition.onresult = event => {
+        const alternatives = Array.from(event.results[event.resultIndex] || []);
+        const plate = alternatives
+          .map(result => resolveVoicePlate(result.transcript))
+          .find(candidate => candidate && CARS_DB[candidate]);
+
+        if (!plate) {
+          targetHint.innerText = 'Номер не найден в базе. Повторите медленнее';
+          return;
+        }
+
+        detectedPlate = plate;
+        ocrCandidatePlate = null;
+        ocrCandidateCount = 0;
+        if (v.srcObject && !isFrameFrozen) freezeCurrentFrame();
+        targetHint.innerText = 'Номер найден голосом';
+        evaluatePlateMatch(plate);
+      };
+      recognition.onerror = event => {
+        const messages = {
+          'no-speech': 'Речь не услышана. Нажмите микрофон и повторите',
+          'not-allowed': 'Разрешите доступ к микрофону в настройках браузера',
+          'service-not-allowed': 'Распознавание речи запрещено браузером',
+          'language-not-supported': 'Распознавание русского языка недоступно',
+          'network': 'Нет связи для распознавания речи'
+        };
+        console.warn('Voice search error:', event.error);
+        targetHint.innerText = messages[event.error] || 'Не удалось распознать речь. Попробуйте еще раз';
+      };
+      recognition.onend = () => {
+        speechRecognition = null;
+        voiceSearchBtn.innerText = '🎙 Голос';
+        voiceSearchBtn.classList.remove('listening');
+      };
+
+      try {
+        recognition.start();
+      } catch (err) {
+        speechRecognition = null;
+        voiceSearchBtn.classList.remove('listening');
+        console.error('Voice search start error:', err);
+        targetHint.innerText = 'Не удалось включить микрофон. Проверьте разрешения браузера';
+      }
     }
 
     async function initBarcodeDetector() {
