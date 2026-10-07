@@ -48,6 +48,7 @@
     .btn-manual { background: rgba(16, 185, 129, 0.15); color: #34d399; border-color: rgba(16, 185, 129, 0.3); }
     .btn-list { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border-color: rgba(59, 130, 246, 0.3); }
     .btn-icon.listening { background: rgba(239, 68, 68, 0.18); color: #fca5a5; border-color: rgba(239, 68, 68, 0.45); }
+    .btn-voice-entry { align-self: center; justify-content: center; width: 100%; }
 
     /* Видоискатель */
     .camera-viewport {
@@ -843,7 +844,7 @@
         <h3 style="font-size: 17px;">Добавить в базу</h3>
         <button class="btn-close-circle" onclick="closeModal()">✕</button>
       </div>
-      <button class="btn-icon" id="voiceEntryBtn" type="button" onclick="toggleVoiceEntry()" style="justify-content: center;">🎙 Заполнить голосом</button>
+      <button class="btn-icon btn-voice-entry" id="voiceEntryBtn" type="button" onclick="toggleVoiceEntry()">🎙 Заполнить голосом</button>
       <div id="voiceEntryHint" role="status" aria-live="polite" style="color: #94a3b8; font-size: 12px; text-align: center;">Продиктуйте номер, ФИО, автомобиль и роль по очереди</div>
       <input type="text" id="mPlate" placeholder="Номер (напр. С640УК69)" autocapitalize="characters">
       <input type="text" id="mOwner" placeholder="ФИО водителя / пассажира">
