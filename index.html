@@ -840,12 +840,15 @@
   <div class="modal-overlay" id="modal" style="align-items: center; justify-content: center;">
     <div class="center-modal">
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h3 style="font-size: 17px;">Внести автомобиль</h3>
+        <h3 style="font-size: 17px;">Добавить в базу</h3>
         <button class="btn-close-circle" onclick="closeModal()">✕</button>
       </div>
+      <button class="btn-icon" id="voiceEntryBtn" type="button" onclick="toggleVoiceEntry()" style="justify-content: center;">🎙 Заполнить голосом</button>
+      <div id="voiceEntryHint" role="status" aria-live="polite" style="color: #94a3b8; font-size: 12px; text-align: center;">Продиктуйте номер, ФИО, автомобиль и роль по очереди</div>
       <input type="text" id="mPlate" placeholder="Номер (напр. С640УК69)" autocapitalize="characters">
       <input type="text" id="mOwner" placeholder="ФИО водителя / пассажира">
-      <input type="text" id="mModel" placeholder="Марка авто и категория">
+      <input type="text" id="mModel" placeholder="Автомобиль (марка, модель)">
+      <input type="text" id="mRole" placeholder="Роль / должность / артист">
       <button class="btn-modal-save" id="saveBtn" onclick="saveToCloud()">Сохранить в базу</button>
     </div>
   </div>
@@ -977,6 +980,7 @@
     let ocrCandidatePlate = null;
     let ocrCandidateCount = 0;
     let speechRecognition = null;
+    let voiceEntryState = null;
     let selectedDetailPlate = null;
     let tesseractWorker = null;
     let activeFilter = 'all';
@@ -1637,6 +1641,10 @@
     }
 
     function toggleVoiceSearch() {
+      if (voiceEntryState && voiceEntryState.active) {
+        targetHint.innerText = 'Сначала завершите голосовое заполнение записи';
+        return;
+      }
       if (speechRecognition) {
         speechRecognition.stop();
         return;
@@ -1706,6 +1714,141 @@
         voiceSearchBtn.classList.remove('listening');
         console.error('Voice search start error:', err);
         targetHint.innerText = 'Не удалось включить микрофон. Проверьте разрешения браузера';
+      }
+    }
+
+    function toggleVoiceEntry() {
+      const voiceEntryBtn = document.getElementById('voiceEntryBtn');
+      const voiceEntryHint = document.getElementById('voiceEntryHint');
+      const SpeechRecognitionApi = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+      if (voiceEntryState && voiceEntryState.active) {
+        voiceEntryState.active = false;
+        voiceEntryState.restartAfterEnd = false;
+        voiceEntryState.recognition.stop();
+        voiceEntryState = null;
+        voiceEntryBtn.innerText = '🎙 Заполнить голосом';
+        voiceEntryBtn.classList.remove('listening');
+        voiceEntryHint.innerText = 'Голосовой ввод остановлен. Поля можно заполнить вручную';
+        return;
+      }
+
+      if (speechRecognition) {
+        voiceEntryHint.innerText = 'Сначала завершите голосовой поиск номера';
+        return;
+      }
+
+      if (!SpeechRecognitionApi) {
+        voiceEntryHint.innerText = 'Голосовой ввод не поддерживается этим браузером';
+        return;
+      }
+
+      if (!voiceEntryState) {
+        voiceEntryState = {
+          index: 0,
+          active: false,
+          restartAfterEnd: false,
+          recognition: null,
+          fields: [
+            { id: 'mPlate', label: 'номер автомобиля', parse: resolveVoicePlate },
+            { id: 'mOwner', label: 'ФИО водителя, артиста или пассажира' },
+            { id: 'mModel', label: 'марку и модель автомобиля' },
+            { id: 'mRole', label: 'роль или должность' }
+          ]
+        };
+      }
+
+      voiceEntryState.active = true;
+      startVoiceEntryStep(SpeechRecognitionApi);
+    }
+
+    function startVoiceEntryStep(SpeechRecognitionApi) {
+      const state = voiceEntryState;
+      if (!state || !state.active) return;
+
+      const field = state.fields[state.index];
+      if (!field) {
+        voiceEntryState = null;
+        return;
+      }
+
+      const recognition = new SpeechRecognitionApi();
+      state.recognition = recognition;
+      recognition.lang = 'ru-RU';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+
+      recognition.onstart = () => {
+        document.getElementById('voiceEntryBtn').innerText = '⏹ Остановить ввод';
+        document.getElementById('voiceEntryBtn').classList.add('listening');
+        document.getElementById('voiceEntryHint').innerText = `Скажите ${field.label}`;
+      };
+      recognition.onresult = event => {
+        const transcript = event.results[event.resultIndex][0].transcript.trim();
+        const value = field.parse ? field.parse(transcript) : transcript;
+        if (!value) {
+          document.getElementById('voiceEntryHint').innerText = 'Номер не распознан. Повторите его по буквам и цифрам';
+          state.restartAfterEnd = true;
+          recognition.stop();
+          return;
+        }
+        if (field.id === 'mPlate' && (!PLATE_REGEX.test(value) || !isValidRussianRegion(value))) {
+          document.getElementById('voiceEntryHint').innerText = 'Не удалось разобрать номер РФ. Повторите, например: эс шесть четыре ноль у ка шесть девять';
+          state.restartAfterEnd = true;
+          recognition.stop();
+          return;
+        }
+
+        document.getElementById(field.id).value = value;
+        state.index++;
+        if (state.index === state.fields.length) {
+          state.active = false;
+          state.restartAfterEnd = false;
+          voiceEntryState = null;
+          document.getElementById('voiceEntryHint').innerText = 'Все поля заполнены. Проверьте данные и нажмите «Сохранить в базу»';
+          document.getElementById('voiceEntryBtn').innerText = '🎙 Заполнить голосом';
+          document.getElementById('voiceEntryBtn').classList.remove('listening');
+        } else {
+          state.restartAfterEnd = true;
+        }
+        recognition.stop();
+      };
+      recognition.onerror = event => {
+        console.warn('Voice entry error:', event.error);
+        const messages = {
+          'no-speech': `Речь не услышана. Нажмите «Повторить» и скажите ${field.label}`,
+          'not-allowed': 'Разрешите доступ к микрофону в настройках браузера',
+          'service-not-allowed': 'Распознавание речи запрещено браузером',
+          'language-not-supported': 'Распознавание русского языка недоступно',
+          'network': 'Нет связи для распознавания речи'
+        };
+        document.getElementById('voiceEntryHint').innerText = messages[event.error] || 'Ошибка голосового ввода. Можно повторить или заполнить вручную';
+        state.active = false;
+        state.restartAfterEnd = false;
+      };
+      recognition.onend = () => {
+        if (state.recognition === recognition) state.recognition = null;
+        if (voiceEntryState !== state) return;
+        if (state.restartAfterEnd && state.active) {
+          state.restartAfterEnd = false;
+          startVoiceEntryStep(SpeechRecognitionApi);
+          return;
+        }
+        if (!state.active) {
+          document.getElementById('voiceEntryBtn').innerText = '🔁 Повторить текущий шаг';
+          document.getElementById('voiceEntryBtn').classList.remove('listening');
+        }
+      };
+
+      try {
+        recognition.start();
+      } catch (err) {
+        state.active = false;
+        state.restartAfterEnd = false;
+        console.error('Voice entry start error:', err);
+        document.getElementById('voiceEntryHint').innerText = 'Не удалось включить микрофон. Проверьте разрешения браузера';
+        document.getElementById('voiceEntryBtn').innerText = '🔁 Повторить текущий шаг';
+        document.getElementById('voiceEntryBtn').classList.remove('listening');
       }
     }
 
@@ -2209,12 +2352,23 @@
     }
 
     function openModal() { document.getElementById('modal').classList.add('open'); }
-    function closeModal() { document.getElementById('modal').classList.remove('open'); }
+    function closeModal() {
+      if (voiceEntryState) {
+        if (voiceEntryState.active) {
+          voiceEntryState.active = false;
+          voiceEntryState.restartAfterEnd = false;
+          voiceEntryState.recognition.stop();
+        }
+        voiceEntryState = null;
+      }
+      document.getElementById('modal').classList.remove('open');
+    }
 
     async function saveToCloud() {
       const pIn = document.getElementById('mPlate');
       const oIn = document.getElementById('mOwner');
       const mIn = document.getElementById('mModel');
+      const roleIn = document.getElementById('mRole');
       const saveBtn = document.getElementById('saveBtn');
 
       const plate = sanitizePlate(pIn.value);
@@ -2230,7 +2384,7 @@
       const newRecord = {
         plate: plate,
         name: oIn.value.trim() || "Гость",
-        role: "Внеплановый",
+        role: roleIn.value.trim() || "Внеплановый",
         car: mIn.value.trim() || "—",
         pass: true,
         is_inside: false
@@ -2243,7 +2397,7 @@
       if (error) {
         alert("Ошибка: " + error.message);
       } else {
-        pIn.value = ""; oIn.value = ""; mIn.value = "";
+        pIn.value = ""; oIn.value = ""; mIn.value = ""; roleIn.value = "";
         closeModal();
         CARS_DB[plate] = newRecord;
         await idbPut('cars', newRecord);
