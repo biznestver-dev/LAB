@@ -972,6 +972,8 @@
     let videoTrack = null;
     let torchActive = false;
     let detectedPlate = null;
+    let ocrCandidatePlate = null;
+    let ocrCandidateCount = 0;
     let selectedDetailPlate = null;
     let tesseractWorker = null;
     let activeFilter = 'all';
@@ -985,6 +987,7 @@
     let operatorName = localStorage.getItem('kpp_operator') || 'Оператор КПП';
 
     const PLATE_REGEX = /^[АВЕКМНОРСТУХABEKMHOPCTYX]\d{3}[АВЕКМНОРСТУХABEKMHOPCTYX]{2}\d{2,3}$/;
+    const OCR_CONFIRMATION_FRAMES = 3;
     const VALID_REGIONS = new Set([
       '01','02','03','04','05','06','07','08','09','10','11','12','13','14','15','16','17','18','19','20',
       '21','22','23','24','25','26','27','28','29','30','31','32','33','34','35','36','37','38','39','40',
@@ -1302,6 +1305,24 @@
 
         // ОБРАБОТКА РЕЗУЛЬТАТА
         if (plate) {
+          if (isAutomatic) {
+            if (plate === ocrCandidatePlate) {
+              ocrCandidateCount++;
+            } else {
+              ocrCandidatePlate = plate;
+              ocrCandidateCount = 1;
+            }
+
+            if (ocrCandidateCount < OCR_CONFIRMATION_FRAMES) {
+              targetHint.innerText = `Проверка номера: ${ocrCandidateCount}/${OCR_CONFIRMATION_FRAMES}`;
+              setScanButtonState(false);
+              return;
+            }
+          } else {
+            ocrCandidatePlate = null;
+            ocrCandidateCount = 0;
+          }
+
           const isNewPlate = detectedPlate !== plate;
           detectedPlate = plate;
           if (!isAutomatic) {
@@ -1316,6 +1337,9 @@
           }
         } else {
           if (isAutomatic) {
+            ocrCandidatePlate = null;
+            ocrCandidateCount = 0;
+            if (!detectedPlate) targetHint.innerText = 'Наведите на номер';
             setScanButtonState(false);
           } else {
             setScanButtonState(true);
@@ -1326,8 +1350,14 @@
 
       } catch (err) {
         console.error("Manual scan error:", err);
-        if (isAutomatic) setScanButtonState(false);
-        else setScanButtonState(true);
+        if (isAutomatic) {
+          ocrCandidatePlate = null;
+          ocrCandidateCount = 0;
+          if (!detectedPlate) targetHint.innerText = 'Наведите на номер';
+          setScanButtonState(false);
+        } else {
+          setScanButtonState(true);
+        }
       } finally {
         isOcrBusy = false;
       }
@@ -1612,6 +1642,8 @@
 
     function resetRecognitionState() {
       detectedPlate = null;
+      ocrCandidatePlate = null;
+      ocrCandidateCount = 0;
       plateView.innerText = "ПОИСК НОМЕРА...";
       detailsBox.style.display = "none";
       target.className = "plate-target";
